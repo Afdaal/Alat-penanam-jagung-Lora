@@ -1,0 +1,233 @@
+#include <SPI.h>
+#include <LoRa.h>
+
+#define SS_915 44
+#define RST_915 46
+#define DIO0_915 42
+
+#define SS_433 4
+#define RST_433 13
+#define DIO0_433 2
+
+LoRaClass LoRa_915;
+LoRaClass LoRa_433;
+
+#define voltageSensorPin A0
+#define trigPin A2
+#define echoPin A3
+
+#define RPWMka 6
+#define LPWMka 7
+#define ENka 5
+
+#define RPWMki 9
+#define LPWMki 10
+#define ENki 8
+
+#define RPWMt 11
+#define LPWMt 12
+#define ENt 3
+
+int counter = 0;
+float voltageValue = 0.0;
+long distance = 0;
+String message = "";
+
+unsigned long lastSendTime = 0;
+const unsigned long sendInterval = 5000;
+
+void setupLoRa() {
+  Serial.begin(115200);
+  LoRa_915.setPins(SS_915, RST_915, DIO0_915);
+  if (!LoRa_915.begin(915E6)) {
+    Serial.println("LoRa 915 init failed!");
+    while (1);
+  }
+  Serial.println("LoRa 915 ready");
+
+  LoRa_433.setPins(SS_433, RST_433, DIO0_433);
+  if (!LoRa_433.begin(433E6)) {
+    Serial.println("LoRa 433 init failed!");
+    while (1);
+  }
+  Serial.println("LoRa 433 ready");
+}
+
+void setup() {
+  setupLoRa();
+  Serial.begin(115200);
+  while (!Serial);
+
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+
+  pinMode(RPWMka, OUTPUT);
+  pinMode(LPWMka, OUTPUT);
+  pinMode(ENka, OUTPUT);
+
+  pinMode(RPWMki, OUTPUT);
+  pinMode(LPWMki, OUTPUT);
+  pinMode(ENki, OUTPUT);
+
+  pinMode(RPWMt, OUTPUT);
+  pinMode(LPWMt, OUTPUT);
+  pinMode(ENt, OUTPUT);
+}
+
+void loop() {
+  receiveData();
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastSendTime >= sendInterval) {
+    lastSendTime = currentMillis;
+    readSensors();
+    message = "Voltage:" + String(voltageValue, 2) + " Volt, Distance:" + String(distance) + " Cm,";
+    sendData(message);
+  }
+}
+
+void receiveData() {
+  int packetSize = LoRa_433.parsePacket();
+  if (packetSize) {
+    String receivedData = "";
+    while (LoRa_433.available()) {
+      receivedData += (char)LoRa_433.read();
+    }
+    Serial.println("Received: " + receivedData);
+
+    if (receivedData.startsWith("F:")) {
+      int pwmValue = receivedData.substring(2).toInt();
+      setMotorForward(pwmValue);
+    } else if (receivedData.startsWith("B:")) {
+      int pwmValue = receivedData.substring(2).toInt();
+      setMotorBackward(pwmValue);
+    } else if (receivedData.startsWith("L:")) {
+      int pwmValue = receivedData.substring(2).toInt();
+      setMotorLeft(pwmValue);
+    } else if (receivedData.startsWith("R:")) {
+      int pwmValue = receivedData.substring(2).toInt();
+      setMotorRight(pwmValue);
+    } else if (receivedData.startsWith("U:")) {
+      int pwmValue = receivedData.substring(2).toInt();
+      setMotorUp(pwmValue);
+    } else if (receivedData.startsWith("D:")) {
+      int pwmValue = receivedData.substring(2).toInt();
+      setMotorDown(pwmValue);
+    } else if (receivedData.startsWith("S:")) {
+      int pwmValue = receivedData.substring(2).toInt();
+      freeze();
+    } else {
+      Serial.println("Unknown command received");
+    }
+  }
+}
+
+void readSensors() {
+  int sensorValue = analogRead(voltageSensorPin);
+  voltageValue = (sensorValue / 1024.0) * 25.6;
+
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  distance = pulseIn(echoPin, HIGH) / 58;
+}
+
+void sendData(const String &message) {
+  LoRa_915.beginPacket();
+  LoRa_915.print(message);
+  LoRa_915.endPacket();
+  Serial.println("Sending: " + message);
+}
+
+void setMotorForward(int pwmValue) {
+  analogWrite(RPWMka, pwmValue);
+  analogWrite(LPWMka, 0);
+  digitalWrite(ENka, HIGH);
+
+  analogWrite(RPWMki, 0);
+  analogWrite(LPWMki, pwmValue);
+  digitalWrite(ENki, HIGH);
+  Serial.print("Motor Forward, PWM: ");
+  Serial.println(pwmValue);
+}
+
+void setMotorBackward(int pwmValue) {
+  analogWrite(RPWMka, 0);
+  analogWrite(LPWMka, pwmValue);
+  digitalWrite(ENka, HIGH);
+  analogWrite(RPWMki, pwmValue);
+  analogWrite(LPWMki, 0);
+  digitalWrite(ENki, HIGH);
+  Serial.print("Motor Backward, PWM: ");
+  Serial.println(pwmValue);
+}
+
+void setMotorLeft(int pwmValue) {
+  analogWrite(RPWMka, pwmValue);
+  analogWrite(LPWMka, 0);
+  digitalWrite(ENka, HIGH);
+  analogWrite(RPWMki, 0);
+  analogWrite(LPWMki, 0);
+  digitalWrite(ENki, LOW);
+  Serial.print("Motor Left, PWM: ");
+  Serial.println(pwmValue);
+}
+
+void setMotorRight(int pwmValue) {
+  analogWrite(RPWMka, 0);
+  analogWrite(LPWMka, 0);
+  digitalWrite(ENka, LOW);
+  analogWrite(RPWMki, 0);
+  analogWrite(LPWMki, pwmValue);
+  digitalWrite(ENki, HIGH);
+  Serial.print("Motor Right, PWM: ");
+  Serial.println(pwmValue);
+}
+
+void setMotorUp(int pwmValue) {
+  analogWrite(RPWMt, pwmValue);
+  analogWrite(LPWMt, 0);
+  digitalWrite(ENt, HIGH);
+  Serial.print("Motor Up, PWM: ");
+  Serial.println(pwmValue);
+}
+
+void setMotorDown(int pwmValue) {
+  analogWrite(RPWMt, 0);
+  analogWrite(LPWMt, pwmValue);
+  digitalWrite(ENt, HIGH);
+  Serial.print("Motor Down, PWM: ");
+  Serial.println(pwmValue);
+  delay(1000);
+  freeze();
+}
+
+void freeze() {
+  digitalWrite(RPWMki, LOW);
+  digitalWrite(LPWMki, LOW);
+  digitalWrite(ENki, LOW);
+  digitalWrite(RPWMka, LOW);
+  digitalWrite(LPWMka, LOW);
+  digitalWrite(ENka, LOW);
+  analogWrite(RPWMt, 0);
+  analogWrite(LPWMt, 0);
+  Serial.println("Freeza");
+}
+
+void softStop(int pwmValue) {
+  for (int speed = pwmValue; speed >= 0; speed -= 8) {
+    analogWrite(RPWMka, speed);
+    analogWrite(LPWMka, speed);
+    delay(5);
+    digitalWrite(ENka, HIGH);
+
+    for (int speed = pwmValue; speed >= 0; speed -= 8) {
+      analogWrite(RPWMki, speed);
+      analogWrite(LPWMki, speed);
+      delay(5);
+    }
+    digitalWrite(ENki, HIGH);
+    Serial.println("Berhenti dengan lembut");
+  }
+}
