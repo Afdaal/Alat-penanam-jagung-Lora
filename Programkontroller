@@ -1,0 +1,175 @@
+#include <SPI.h>
+#include <LoRa.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+#define SS_915 12
+#define RST_915 2
+#define DIO0_915 32
+
+#define SS_433 5
+#define RST_433 13
+#define DIO0_433 14
+
+LoRaClass LoRa_915;
+LoRaClass LoRa_433;
+
+#define BUTTON_FORWARD_PIN 27
+#define BUTTON_BACKWARD_PIN 26
+#define BUTTON_LEFT_PIN 25
+#define BUTTON_RIGHT_PIN 33
+#define BUTTON_UP_PIN 15
+#define BUTTON_DOWN_PIN 4
+
+#define POT_PIN 34
+
+int previousPWM = -1;
+const int deadband = 5;
+const int numReadings = 10;
+int readings[numReadings] = {0};
+int readIndex = 0, total = 0, average = 0;
+
+LiquidCrystal_I2C lcd(0x27, 20, 4);
+const int maxDistance = 24, minDistance = 2;
+String message = "";
+
+void setupLoRa() {
+  Serial.begin(115200);
+  lcd.begin();
+  lcd.backlight();
+  lcd.setCursor(3, 1);
+  lcd.print("LoRa Initiation");
+  delay(2000);
+  lcd.clear();
+
+  LoRa_915.setPins(SS_915, RST_915, DIO0_915);
+  if (!LoRa_915.begin(915E6)) {
+    Serial.println("LoRa 915 init failed!");
+    while (1);
+  }
+  Serial.println("LoRa 915 ready");
+  lcd.setCursor(3, 0);
+
+  LoRa_433.setPins(SS_433, RST_433, DIO0_433);
+  if (!LoRa_433.begin(433E6)) {
+    Serial.println("LoRa 433 init failed!");
+    while (1);
+  }
+  Serial.println("LoRa 433 ready");
+  lcd.setCursor(3, 2);
+}
+
+void setup() {
+  setupLoRa();
+  pinMode(BUTTON_FORWARD_PIN, INPUT_PULLUP);
+  pinMode(BUTTON_BACKWARD_PIN, INPUT_PULLUP);
+  pinMode(BUTTON_LEFT_PIN, INPUT_PULLUP);
+  pinMode(BUTTON_RIGHT_PIN, INPUT_PULLUP);
+  pinMode(BUTTON_UP_PIN, INPUT_PULLUP);
+  pinMode(BUTTON_DOWN_PIN, INPUT_PULLUP);
+  pinMode(POT_PIN, INPUT);
+
+  for (int i = 0; i < numReadings; i++) {
+    readings[i] = 0;
+  }
+}
+
+void loop() {
+  receiveData();
+  processInput();
+  sendData(message);
+}
+
+void processInput() {
+  message;
+  int potValue = analogRead(POT_PIN);
+  int pwmValue = map(potValue, 0, 4095, 0, 255);
+
+  if (abs(pwmValue - previousPWM) > deadband) {
+    previousPWM = pwmValue;
+  } else {
+    pwmValue = previousPWM;
+  }
+
+  lcd.setCursor(0, 3);
+  lcd.print("Kondisi:");
+
+  if (digitalRead(BUTTON_FORWARD_PIN) == LOW) {
+    message = "F:" + String(pwmValue);
+    lcd.setCursor(9, 3);
+    lcd.print("Maju   ");
+  } else if (digitalRead(BUTTON_BACKWARD_PIN) == LOW) {
+    message = "B:" + String(pwmValue);
+    lcd.setCursor(9, 3);
+    lcd.print("Mundur ");
+  } else if (digitalRead(BUTTON_LEFT_PIN) == LOW) {
+    message = "L:" + String(pwmValue);
+    lcd.setCursor(9, 3);
+    lcd.print("Kiri   ");
+  } else if (digitalRead(BUTTON_RIGHT_PIN) == LOW) {
+    message = "R:" + String(pwmValue);
+    lcd.setCursor(9, 3);
+    lcd.print("Kanan  ");
+  } else if (digitalRead(BUTTON_UP_PIN) == LOW) {
+    message = "U:" + String(pwmValue);
+    lcd.setCursor(9, 3);
+    lcd.print("Atas   ");
+  } else if (digitalRead(BUTTON_DOWN_PIN) == LOW) {
+    message = "D:" + String(pwmValue);
+    lcd.setCursor(9, 3);
+    lcd.print("Bawah  ");
+  } else {
+    message = "S:" + String(pwmValue);
+    lcd.setCursor(9, 3);
+    lcd.print("Stop   ");
+  }
+
+  lcd.setCursor(0, 2);
+  lcd.print("Pwm    :");
+  lcd.setCursor(9, 2);
+  lcd.print(pwmValue);
+}
+
+void sendData(const String & message) {
+  LoRa_433.beginPacket();
+  LoRa_433.print(message);
+  LoRa_433.endPacket();
+  Serial.println("Sending: " + message);
+}
+
+void receiveData() {
+  int packetSize = LoRa_915.parsePacket();
+  if (packetSize) {
+    String receivedData = "";
+
+    while (LoRa_915.available()) {
+      receivedData += (char)LoRa_915.read();
+    }
+
+    Serial.println("Diterima di LoRa 915:");
+    Serial.print(receivedData);
+
+    int voltageIndex = receivedData.indexOf("Voltage:");
+    int distanceIndex = receivedData.indexOf("Distance:");
+
+    if (voltageIndex != -1 && distanceIndex != -1) {
+      String voltageString = receivedData.substring(voltageIndex + 8, distanceIndex - 2);
+      String distanceString = receivedData.substring(distanceIndex + 9, receivedData.length() - 1);
+
+      float voltage = voltageString.toFloat();
+      int distance = distanceString.toInt();
+
+      float distancePercentage = (distance <= minDistance) 
+          ? 100.0 
+          : map(distance, minDistance, maxDistance, 100, 0);
+
+      lcd.setCursor(0, 0);
+      lcd.print("Voltage: " + String(voltage, 2) + "V");
+      lcd.setCursor(0, 1);
+      lcd.print("Jagung : " + String(distancePercentage, 2) + "%");
+      Serial.println(" Jagung: " + String(distancePercentage, 2) + "%");
+    } else {
+      Serial.println("Format data tidak valid!");
+    }
+  }
+}
